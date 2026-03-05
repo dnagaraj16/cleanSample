@@ -1,0 +1,186 @@
+Application/Interfaces/IUserRepository.cs
+using Domain.Entities;
+
+namespace Application.Interfaces;
+
+public interface IUserRepository
+{
+    Task<UserProfile?> GetUserAsync(string username);
+    Task<bool> ValidateUserAsync(string username, string password);
+}
+Application/Interfaces/IStoredProcedureExecutor.cs
+namespace Application.Interfaces;
+
+public interface IStoredProcedureExecutor
+{
+    Task<IEnumerable<T>> ExecuteAsync<T>(string procedureName, object parameters = null);
+    Task<int> ExecuteNonQueryAsync(string procedureName, object parameters = null);
+}
+
+*******************
+dotnet add Infrastructure package Dapper
+dotnet add Infrastructure package Microsoft.Data.SqlClient
+Infrastructure/Data/StoredProcedureExecutor.cs
+
+using Application.Interfaces;
+using Dapper;
+using Microsoft.Data.SqlClient;
+using System.Data;
+
+namespace Infrastructure.Data;
+
+public class StoredProcedureExecutor : IStoredProcedureExecutor
+{
+    private readonly string _connectionString;
+
+    public StoredProcedureExecutor(IConfiguration config)
+    {
+        _connectionString = config.GetConnectionString("DefaultConnection");
+    }
+
+    public async Task<IEnumerable<T>> ExecuteAsync<T>(string procedureName, object parameters = null)
+    {
+        using var conn = new SqlConnection(_connectionString);
+        return await conn.QueryAsync<T>(procedureName, parameters, commandType: CommandType.StoredProcedure);
+    }
+
+    public async Task<int> ExecuteNonQueryAsync(string procedureName, object parameters = null)
+    {
+        using var conn = new SqlConnection(_connectionString);
+        return await conn.ExecuteAsync(procedureName, parameters, commandType: CommandType.StoredProcedure);
+    }
+}
+
+
+
+Infrastructure/Data/UserRepository.cs
+
+using Application.Interfaces;
+using Domain.Entities;
+
+namespace Infrastructure.Data;
+
+public class UserRepository : IUserRepository
+{
+    private readonly IStoredProcedureExecutor _executor;
+
+    public UserRepository(IStoredProcedureExecutor executor)
+    {
+        _executor = executor;
+    }
+
+    public async Task<UserProfile?> GetUserAsync(string username)
+    {
+        var result = await _executor.ExecuteAsync<UserProfile>("sp_GetUserByUsername", new { Username = username });
+        return result.FirstOrDefault();
+    }
+
+    public async Task<bool> ValidateUserAsync(string username, string password)
+    {
+        var result = await _executor.ExecuteAsync<int>("sp_ValidateUser", new { Username = username, Password = password });
+        return result.FirstOrDefault() == 1;
+    }
+}
+*************************
+
+dotnet add WebUI package MudBlazor
+WebUI/Program.cs
+using Application.Interfaces;
+using Infrastructure.Data;
+using Microsoft.AspNetCore.Components.Authorization;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddRazorPages();
+builder.Services.AddServerSideBlazor();
+
+builder.Services.AddScoped<IStoredProcedureExecutor, StoredProcedureExecutor>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<AuthenticationStateProvider, CustomAuthProvider>();
+
+builder.Services.AddMudServices();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error");
+}
+
+app.UseStaticFiles();
+app.UseRouting();
+app.MapBlazorHub();
+app.MapFallbackToPage("/_Host");
+
+app.Run();
+
+WebUI/Auth/CustomAuthProvider.cs
+using Application.Interfaces;
+using Microsoft.AspNetCore.Components.Authorization;
+using System.Security.Claims;
+
+namespace WebUI.Auth;
+
+public class CustomAuthProvider : AuthenticationStateProvider
+{
+    private readonly IUserRepository _userRepo;
+    private ClaimsPrincipal _currentUser = new ClaimsPrincipal(new ClaimsIdentity());
+
+    public CustomAuthProvider(IUserRepository userRepo)
+    {
+        _userRepo = userRepo;
+    }
+
+    public async Task<bool> LoginAsync(string username, string password)
+    {
+        if (await _userRepo.ValidateUserAsync(username, password))
+        {
+            var user = await _userRepo.GetUserAsync(username);
+            var identity = new ClaimsIdentity(new[]
+            {
+                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Role, user.Role)
+            }, "CustomAuth");
+
+            _currentUser = new ClaimsPrincipal(identity);
+            NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
+            return true;
+        }
+        return false;
+    }
+
+    public override Task<AuthenticationState> GetAuthenticationStateAsync()
+    {
+        return Task.FromResult(new AuthenticationState(_currentUser));
+    }
+}
+WebUI/Shared/NavMenu.razor
+
+<MudDrawer Open="true" Variant="DrawerVariant.Mini" Elevation="1">
+    <MudNavMenu>
+        <MudNavLink Href="/dashboard" Icon="@Icons.Material.Filled.Home">Dashboard</MudNavLink>
+        <MudNavLink Href="/reports" Icon="@Icons.Material.Filled.Assessment">Reports</MudNavLink>
+        <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">Settings</MudNavLink>
+    </MudNavMenu>
+</MudDrawer>
+WebUI/wwwroot/css/sabic-theme.css
+:root {
+    --sabic-blue: #004C97;
+    --sabic-orange: #F58220;
+    --sabic-white: #FFFFFF;
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background-color: var(--sabic-white);
+    color: var(--sabic-blue);
+}
+
+Update appsettings.json in WebUI with your SQL connection string.
+
+Ensure stored procedures sp_GetUserByUsername and sp_ValidateUser exist in your DB.
+
+Run:
+dotnet run --project WebUI
+
+
