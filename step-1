@@ -1,0 +1,15 @@
+dotnet new sln -n BlazorCleanArch
+
+dotnet new classlib -n Domain
+dotnet new classlib -n Application
+dotnet new classlib -n Infrastructure
+dotnet new blazorserver -n WebUI
+
+dotnet sln add Domain/Domain.csproj
+dotnet sln add Application/Application.csproj
+dotnet sln add Infrastructure/Infrastructure.csproj
+dotnet sln add WebUI/WebUI.csproj
+
+dotnet add Application/Application.csproj reference Domain/Domain.csproj
+dotnet add Infrastructure/Infrastructure.csproj reference Application/Application.csproj Domain/Domain.csproj
+dotnet add WebUI/WebUI.csproj reference Application/Application.csproj Infrastructure/Infrastructure.csproj Domain/Domain.csproj
